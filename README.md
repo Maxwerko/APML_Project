@@ -1,4 +1,7 @@
-# Bayesian inference in diffusion tensor imaging
-### Course project in Advanced Probabilistic Machine Learning
+# Bayesian Inference in Diffusion Tensor Imaging
 
-Infer local tissue properties from real-world diffusion MRI data. Given the same Bayesian model, implement different inference techniques which will be compared
+**Course project in Advanced Probabilistic Machine Learning**
+
+Infer local tissue properties from real-world diffusion MRI data. Given the same Bayesian model, four different inference techniques will be implemented and compared.
+
+---
