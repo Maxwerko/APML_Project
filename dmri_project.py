@@ -231,6 +231,7 @@ parameterizations. Already implemented.
 Hint: you will make use of these helpers later in the project,
 the ones involving theta are useful for VI and Laplace.
 """
+#hhhh
 
 def compute_D(evals, V):
     """
