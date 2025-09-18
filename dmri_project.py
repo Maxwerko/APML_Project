@@ -404,54 +404,73 @@ These are required before any inference method can be attempted.
 class frozen_prior:
     # Placeholder for the prior distribution.
     # Hint: you may want to add input parameters to these methods.
-
-
     def __init__(self, alpha_S=2.0, theta_S=500, alpha_l=4, theta_l=2.5e-4):
-        self.alpha_S = alpha_S 
-        self.theta_S = theta_S
-        self.alpha_l = alpha_l 
-        self.theta_l = theta_l
-        #self.evecs = Rotation.random(3).as_euler('zxy', degrees=True)
-        #self.dist = gamma(a=self.alpha_S, scale=self.theta_S) * gamma
-        self.S0 = gamma(a=self.alpha_S, scale=self.theta_S)
-        self.evals = gamma(a=self.alpha_l, scale=self.theta_l)
-        
-        #raise NotImplementedError
-    
+        self.alpha_S = float(alpha_S) 
+        self.theta_S = float(theta_S)
+        self.alpha_l = float(alpha_l)
+        self.theta_l = float(theta_l)
+        # SciPy-objekt för gamma (shape–scale-parametrisering) 
+        self.S0_dist = gamma(a=self.alpha_S, scale=self.theta_S)
+        self.evals_dist = gamma(a=self.alpha_l, scale=self.theta_l)
+
     def rvs(self, random_state=None):
-        "Draw random samples from the prior distribution"
-        #S0 = np.random.gamma(self.alpha_S, self.theta_S)                 # baseline signal
-        #evals = np.random.gamma(self.alpha_l, self.theta_l, size=3)      # 3 eigenvalues
-        V = Rotation.random().as_matrix()                                # random rotation (3x3 matrix)
-        S0 = self.S0.rvs(size=1, random_state=random_state) 
-        evals = self.evals.rvs(size=3, random_state=random_state)
-        return S0, evals, V
+        "Draw random samples from the prior distribution" # .rv() = sampling
+        V = Rotation.random().as_matrix() # random rotation (3x3 matrix)
+        S0 = self.S0_dist.rvs(size=1, random_state=random_state) # baseline signal
+        evals = self.evals_dist.rvs(size=3, random_state=random_state) # 3 eigenvalues
+        return float(S0.squeeze()), evals, V
     
-    def logpdf(self, _S0, _evals, _V):
-        "a method to compute the log-probability density (or mass) function at a given value of z"
-        lp = self.S0.logpdf(_S0) + self.evals.logpdf(_evals)
-        raise NotImplementedError
-        return lp
+    def logpdf(self, S0, evals, include_rotation_const=True): #vet inte riktigt vad include_rotation gör
+        """
+        Compute log p(z) = log p(S0) + sum_i log p(lambda_i) + log p(V).
+        Här lämnar vi log p(V) som en konstant (uniform på SO(3)).
+        Parameters
+        ----------
+        S0 : float
+        evals : array-like, shape (3,)
+        """ # .logpdf() = beräkna slhet
+        S0 = float(np.asarray(S0).squeeze())
+        evals = np.asarray(evals).reshape(-1)
+
+        lp = self.S0_dist.logpdf(S0)
+        lp += np.sum(self.evals_dist.logpdf(evals))
         
-__name__ = 'Not_main'
-print('Creating frozen prior')
-prior = frozen_prior()
-S0, evals, V = prior.rvs()
-print(f'S0 = {S0}')
-print(f'evals = {evals}')
-print(f'V = {V}')
+        return float(lp)
+
+def print_prior_logpdf_for_point_estimate(include_rotation_const=True):
+    y, point_estimate, gtab = get_preprocessed_data()
+    S0_hat, evals_hat, evecs_hat = point_estimate
+    prior = frozen_prior()
+    lp = prior.logpdf(S0_hat, evals_hat, include_rotation_const=include_rotation_const)
+    print(f"logpdf(prior) = {lp:.3f}")
+
 
 class frozen_likelihood:
     # Placeholder for the likelihood (with partial code provided).
     # Hint: you may want to add input parameters to these methods.
-
-    def __init__(self, gtab):
+    """
+    Gaussian likelihood:
+        y_i ~ N(S_i, sigma^2),  S_i = S0 * exp( - q_i^T D q_i )
+    with  q = sqrt(bvals) * bvecs  (same construction as in the template)
+    self.gtab.bvals = b-värden (diffusionsstyrka)
+    self.gtab.bvecs = b-vektorer (riktningar)
+    """
+    def __init__(self, y, gtab, sigma=29.0):
         self.gtab = gtab   # store gradient table with b-values and b-vectors
+        self.y = np.asarray(y).reshape(-1)  # ensure y is a 1D array
+        self.sigma = float(sigma)  # noise standard deviation
 
-        raise NotImplementedError
+        # Precompute normalizing constant for Gaussian (sum over N points)
+        self.N = self.y.shape[0]
+        self._logZ = -0.5 * self.N * np.log(2 * np.pi * self.sigma**2)
 
     def logpdf(self, S0, evecs, evals):
-        S0 = np.atleast_1d(S0)        # ensure S0 is array-like
+        """
+        Returns log p(y | S0, D) where D = V diag(evals) V^T.
+        Supports scalar S0 / single D (returns a float).
+        """
+
+        S0 = np.atleast_1d(S0).astype(float)        # ensure S0 is array-like
         D = compute_D(evals, evecs)   # reconstruct diffusion tensor
 
         # Build q from diffusion gradients (b-values & b-vectors),
@@ -460,9 +479,33 @@ class frozen_likelihood:
 
         # Model signal S given tensor D and baseline S0
         S = S0[:, None] * np.exp( - np.einsum('...j, ijk, ...k->i...', q, D, q))
-        
-        raise NotImplementedError
+            # Residuals and Gaussian log-likelihood (sum over N)
+        resid = self.y - S                           # shape (..., N)
+        ll = self._logZ - 0.5 / (self.sigma**2) * np.sum(resid**2, axis=-1)
 
+        # Return float if single case
+        return float(np.asarray(ll).squeeze())    
+       
+def print_likelihood_logpdf_for_point_estimate():
+    y, point_estimate, gtab = get_preprocessed_data(force_recompute=False)
+    S0_hat, evals_hat, evecs_hat = point_estimate
+
+    like = frozen_likelihood(y, gtab, sigma=29.0)
+    lp = like.logpdf(S0_hat, evecs_hat, evals_hat)
+    print(f"logpdf(likelihood) = {lp:.3f}")
+
+__name__ = "Not_main"
+print_prior_logpdf_for_point_estimate(include_rotation_const=True)
+prior = frozen_prior()
+
+    # Dra ett prov från priorn
+S0, evals, V = prior.rvs()
+
+print("S0 (baseline signal):", S0, "   typ:", type(S0))
+print("evals (3 eigenvalues):", evals, "   shape:", evals.shape)
+print("V (rotation matrix):\n", V, "   shape:", V.shape)
+
+print_likelihood_logpdf_for_point_estimate()
 
 
 """
